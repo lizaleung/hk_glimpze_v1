@@ -13,7 +13,10 @@ import { refreshCreNews, NEWS_TAG } from "@/lib/cre-news";
  * Cron (see vercel.json).
  *
  * Auth: Vercel Cron sends `Authorization: Bearer ${CRON_SECRET}` when CRON_SECRET
- * is set. Locally (no CRON_SECRET) it's open so you can curl it to seed snapshots.
+ * is set, so the secret is required on any deployment. It fails CLOSED in prod —
+ * a missing secret returns 503 rather than leaving this expensive endpoint open
+ * to the public. Only outside Vercel (local `next dev`/`start`) is it left open,
+ * so you can curl it to seed snapshots without configuring a secret.
  */
 
 export const runtime = "nodejs";
@@ -27,6 +30,13 @@ export async function GET(req: Request) {
     if (auth !== `Bearer ${secret}`) {
       return NextResponse.json({ error: "unauthorized" }, { status: 401 });
     }
+  } else if (process.env.VERCEL) {
+    // Deployed without a secret: refuse rather than expose an open, expensive
+    // (live fetch + Opus web_search) endpoint. Set CRON_SECRET to enable it.
+    return NextResponse.json(
+      { error: "CRON_SECRET not configured" },
+      { status: 503 }
+    );
   }
 
   const results: Record<string, string> = {};
