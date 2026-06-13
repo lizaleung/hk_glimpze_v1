@@ -32,11 +32,19 @@ export interface HsiDataSource {
 }
 
 function pythonApiBase(): string {
+  // Explicit override wins everywhere.
   if (process.env.PYTHON_API_BASE_URL) return process.env.PYTHON_API_BASE_URL;
+  // On Vercel the Python function shares the deployment domain.
   if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
-  return process.env.NODE_ENV === "development"
-    ? "http://localhost:8000"
-    : "http://localhost:3000";
+  // Local dev: scripts/dev_api.py serves the function on :8000.
+  if (process.env.NODE_ENV === "development") return "http://localhost:8000";
+  // Production without VERCEL_URL or an override: there is no sensible default —
+  // fail loud rather than silently fetch from localhost (which would just hang
+  // or 404). Set PYTHON_API_BASE_URL to point at the data function.
+  throw new Error(
+    "Cannot resolve the Python data function URL: set PYTHON_API_BASE_URL " +
+      "(no VERCEL_URL present and not in development)."
+  );
 }
 
 /** Default source: the Python yfinance serverless function (/api/hsi_valuation). */
