@@ -16,6 +16,7 @@ import { Line, Chart } from "react-chartjs-2";
 import type { AnalysisResult } from "@/lib/analysis-types";
 import { fmtNum, fmtAsOf, monthsSince } from "@/lib/format";
 import type { CreRiskData, WatchStatus, WatchGroup } from "./fetcher";
+import type { NewsResult } from "@/lib/cre-news";
 
 ChartJS.register(
   CategoryScale,
@@ -92,21 +93,22 @@ function Kpi({
   );
 }
 
-interface NewsState {
+interface NewsState extends NewsResult {
   loading: boolean;
-  enabled?: boolean;
-  items?: { date: string; title: string; url: string; source?: string }[];
-  links?: { label: string; url: string }[];
-  message?: string;
-  error?: string;
-  asOf?: string;
 }
 
-export function CreRiskView({ result }: { result: AnalysisResult<CreRiskData> }) {
+export function CreRiskView({
+  result,
+  initialNews,
+}: {
+  result: AnalysisResult<CreRiskData>;
+  initialNews: NewsResult;
+}) {
   const { data, source, asOf, cached } = result;
   const [clrThreshold, setClrThreshold] = useState(2.5);
   const [officeThreshold, setOfficeThreshold] = useState(-5);
-  const [news, setNews] = useState<NewsState>({ loading: false });
+  // Seeded with the daily-snapshot news (scanned in cron); Re-scan does a live refresh.
+  const [news, setNews] = useState<NewsState>({ loading: false, ...initialNews });
 
   const clrDelta = data.priorClr != null ? data.latestClr - data.priorClr : null;
 
@@ -266,13 +268,17 @@ export function CreRiskView({ result }: { result: AnalysisResult<CreRiskData> })
   );
 
   async function rescan() {
-    setNews({ loading: true });
+    setNews((prev) => ({ ...prev, loading: true }));
     try {
       const res = await fetch("/api/cre-news", { method: "POST" });
-      const json = await res.json();
+      const json = (await res.json()) as NewsResult;
       setNews({ loading: false, ...json });
     } catch (e) {
-      setNews({ loading: false, error: e instanceof Error ? e.message : "Request failed" });
+      setNews((prev) => ({
+        ...prev,
+        loading: false,
+        error: e instanceof Error ? e.message : "Request failed",
+      }));
     }
   }
 

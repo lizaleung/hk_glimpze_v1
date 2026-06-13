@@ -26,15 +26,13 @@ function blobPath(slug: string): string {
   return `${PREFIX}${slug}.json`;
 }
 
-export async function writeSnapshot<T>(
-  slug: string,
-  result: AnalysisResult<T>
-): Promise<void> {
-  const snapshot: Snapshot<T> = {
-    result: { ...result, cached: true },
-    refreshedAt: new Date().toISOString(),
-  };
-  const body = JSON.stringify(snapshot);
+/* ------------------------------------------------------------------ */
+/* Payload-agnostic storage core (Blob in prod, filesystem in dev)     */
+/* ------------------------------------------------------------------ */
+
+/** Persist an arbitrary JSON-serializable value under a stable slug. */
+export async function writeJson(slug: string, value: unknown): Promise<void> {
+  const body = JSON.stringify(value);
 
   if (useBlob) {
     const { put } = await import("@vercel/blob");
@@ -56,7 +54,8 @@ export async function writeSnapshot<T>(
   await fs.writeFile(path.join(dir, `${slug}.json`), body, "utf-8");
 }
 
-export async function readSnapshot<T>(slug: string): Promise<Snapshot<T> | null> {
+/** Read a value previously stored by writeJson. null on miss or any error. */
+export async function readJson<T>(slug: string): Promise<T | null> {
   try {
     if (useBlob) {
       const { list } = await import("@vercel/blob");
@@ -65,16 +64,35 @@ export async function readSnapshot<T>(slug: string): Promise<Snapshot<T> | null>
       if (!match) return null;
       const res = await fetch(match.url, { cache: "no-store" });
       if (!res.ok) return null;
-      return (await res.json()) as Snapshot<T>;
+      return (await res.json()) as T;
     }
 
     const { promises: fs } = await import("fs");
     const path = await import("path");
     const file = path.join(process.cwd(), ".snapshots", `${slug}.json`);
     const raw = await fs.readFile(file, "utf-8");
-    return JSON.parse(raw) as Snapshot<T>;
+    return JSON.parse(raw) as T;
   } catch {
     // Missing snapshot or read error → caller falls back to a live fetch.
     return null;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Analysis snapshots (the AnalysisResult envelope), built on the core */
+/* ------------------------------------------------------------------ */
+
+export async function writeSnapshot<T>(
+  slug: string,
+  result: AnalysisResult<T>
+): Promise<void> {
+  const snapshot: Snapshot<T> = {
+    result: { ...result, cached: true },
+    refreshedAt: new Date().toISOString(),
+  };
+  return writeJson(slug, snapshot);
+}
+
+export function readSnapshot<T>(slug: string): Promise<Snapshot<T> | null> {
+  return readJson<Snapshot<T>>(slug);
 }
