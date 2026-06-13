@@ -1,0 +1,115 @@
+Build a personal financial-analysis dashboard as a Next.js (App Router) + TypeScript +
+Tailwind app, deployed to Vercel. This is the first of many analyses I'll add over time,
+so architect for extensibility. Keep it a clean, dense tool — not a marketing page.
+Before writing feature code, propose the folder structure and the analysis-registry
+interface, then proceed. The decisions below are already made — do NOT re-ask them.
+## Stack & conventions
+- TypeScript, Next.js App Router (v15), React 19, Tailwind v3.
+- `npm run dev` must work locally; deploy to Vercel with zero config.
+- Sensible loading + error states everywhere (financial APIs fail and rate-limit).
+## Architecture (build these seams from the start)
+1. Analysis registry pattern. Each analysis is a self-contained module under
+   `app/analyses/<slug>/` with its own `fetcher.ts` (data source + analysis logic),
+   `view.tsx`, `page.tsx`, and `loading.tsx`. A shell (`app/layout.tsx` +
+   `lib/ui/Sidebar.tsx`) renders the sidebar from `lib/registry.ts` (pure metadata:
+   slug, title, description, tags) and knows nothing about analysis internals.
+   Adding an analysis = new module + one registry line. No shell edits.
+2. Shared types in `lib/analysis-types.ts`: `AnalysisMeta`, `AnalysisFetcher<T>`, and
+   `AnalysisResult<T>` carrying `{ data, asOf, source, cached }`.
+3. Swappable data source: each analysis fetches through an interface (e.g.
+   `HsiDataSource`, `ClrDataSource`), not a concrete client, so the provider can be
+   swapped without touching ranking/analysis logic or the view.
+4. Shared UI primitives in `lib/ui/`: `RankedTable` (generic, with full-width
+   divergence sub-rows), `MetricCard`, `FlagBadge` + `DivergenceNote`, `ErrorPanel`,
+   `Sidebar`. Reusable across analyses.
+## Data refresh — daily snapshot, cached for traffic (build this, not live-per-request)
+Expensive fetch+analyze runs once a day, never on the request path:
+- A Vercel Cron job (in `vercel.json`, schedule `0 22 * * *` = 06:00 HKT) hits
+  `GET /api/cron/refresh`, which runs every analysis's live fetcher, writes a JSON
+  snapshot, and calls `revalidateTag`/`revalidatePath`. Protect it with `CRON_SECRET`
+  (Vercel sends it as a Bearer token); leave it open locally for seeding.
+- Snapshot store (`lib/snapshot.ts`): Vercel Blob in production (`@vercel/blob`,
+  `BLOB_READ_WRITE_TOKEN`, stable path per slug, `addRandomSuffix:false`); local
+  filesystem `.snapshots/` fallback when no token, so `npm run dev` works.
+- `lib/analyses-runtime.ts`: maps slug → live fetcher (the one file importing analysis
+  internals; keeps `registry.ts` pure). `lib/load-analysis.ts`: `loadAnalysis(slug)`
+  reads the snapshot wrapped in `unstable_cache` (so 1000+ visitors share one read),
+  falling back to a live fetch if no snapshot exists yet.
+- Pages render from `loadAnalysis<T>(slug)`. Views show "Cached daily snapshot" vs
+  "Live fetch" based on `result.cached`.
+## Analysis 1 — "HSI Valuation Ranking" (slug: hsi-valuation)
+Rank current Hang Seng Index constituents by valuation multiples.
+- Data source: Python `yfinance` as a Vercel serverless function (decision: Python,
+  not a JS Yahoo wrapper). Implement `api/hsi_valuation.py` (Vercel Python runtime,
+  BaseHTTPRequestHandler) returning raw JSON `{source, asOf, rows[]}` where each row is
+  `{ticker, name, trailingPE, forwardPE, peg (trailingPegRatio||pegRatio), marketCap}`
+  for the ~70 HSI `.HK` tickers, fetched concurrently (ThreadPoolExecutor). Put the
+  fetch logic in `api/_lib/yf_source.py` so it's shared.
+  TRADEOFF to handle: plain `next dev` does not serve `/api/*.py`. So add
+  `scripts/dev_api.py` (a tiny HTTP server importing the same `_lib` logic on :8000)
+  and run it alongside Next via `concurrently` in `npm run dev`. The TS data source
+  (`PythonYfinanceSource`) resolves its base URL: `PYTHON_API_BASE_URL` env →
+  `VERCEL_URL` (prod) → `localhost:8000` (dev). Put `requirements.txt` (yfinance) at
+  repo root; set `vercel.json` functions `api/*.py` memory 1024, maxDuration 60.
+- Analysis logic in TS (not Python): exclude rows with null/≤0 trailing P/E or PEG;
+  produce Top-10 by trailing P/E, Top-10 by PEG, the intersection of both, and a
+  separate excluded list with reasons. Flag rows where P/E and PEG disagree sharply
+  (high PE >30 & low PEG <1, or low PE <15 & high PEG >2.5) and where forward/trailing
+  P/E diverges sharply (ratio <0.7 = growth expected, >1.4 = decline expected).
+- View: three ranked tables (ticker, name, trailing P/E, forward P/E, PEG, market cap),
+  an "in both" badge, divergence notes under flagged rows, four metric cards
+  (constituents/valid/excluded/in-both), a collapsible excluded list, and source +
+  as-of provenance.
+## Analysis 2 — "HK CRE Risk Monitor" (slug: hk-cre-risk)
+Track Hong Kong commercial-real-estate credit risk; quarterly cadence; alerts.
+- Classified loan ratio (LIVE, JS-native fetch — no Python): HKMA Monthly Statistical
+  Bulletin JSON API:
+  https://api.hkma.gov.hk/public/market-data-and-statistics/monthly-statistical-bulletin/banking/assetquality-ais?pagesize=200&sortby=end_of_month&sortorder=desc
+  Response: `result.records[]` with `end_of_month` ("YYYY-MM"), `cl_gross_total`
+  (overall CLR %), `cl_gross_mainland_lend` (mainland CLR %). Filter to quarter-ends
+  (months 03/06/09/12), keep last 12 quarters, sort ascending. Behind a `ClrDataSource`
+  interface (`HkmaClrSource`).
+- RVD commercial property (SEED, link out only — RVD publishes XLS/PDF the browser
+  can't parse): seed 12 quarters of private office price index ending Q4 2025 ≈ 93.7,
+  −4.3% QoQ, −13.6% YoY (RVD HK Property Review 2026). Compute QoQ/YoY from the index so
+  they're internally consistent. Link https://www.rvd.gov.hk/en/publications/property_market_statistics.html
+- Provision coverage ratio (SEED, semi-annual): 145% after collateral, end-Mar 2025
+  (HKMA Half-Yearly Stability Report).
+- Developer watchlist (SEED, editorial — see list below), three groups.
+- Developer news re-scan: a "Re-scan" button → `app/api/cre-news/route.ts` (Node route,
+  official `@anthropic-ai/sdk`, model `claude-opus-4-8`) using server-side web_search to
+  extract recent HK/mainland developer credit news as {date,title,url,source} tuples.
+  Requires `ANTHROPIC_API_KEY`; degrade gracefully to SCMP topic-page links without it.
+  (Use web_search rather than scraping SCMP HTML — SCMP is paywalled/blocks scrapes.)
+Layout:
+- Header: title + config inputs for CLR threshold (default 2.5%) and office QoQ
+  threshold (default −5%), plus a Refresh button.
+- Alert banner (evaluated client-side): red if CLR ≥ threshold; amber if within 0.3pp.
+  Red if office QoQ ≤ threshold; amber if approaching. Amber if defaults+restructures ≥ 1
+  or watches > 2. Green otherwise. Overall = worst signal; list the triggered reasons.
+- 4 KPI cards with green/amber/red status dots: Classified Loan Ratio (live, QoQ delta
+  chip), Mainland-Related CLR (live), Provision Coverage (seed, stale dot), Office Price
+  YoY (seed, stale dot).
+- Two charts (Chart.js via react-chartjs-2): (1) line of overall + mainland CLR over 12
+  quarters with a dashed horizontal threshold line; (2) bar of office QoQ % (red bars
+  where ≤ threshold) overlaid with the index level line on a secondary y-axis.
+- Watchlist table grouped by section with group header rows; within each group sort
+  ok → watch → restructure → default. Status badges: ok (green), watch (amber),
+  restructure (purple), default (red).
+- Methodology footnote: define classified loans, note HKMA's 9th-business-day release
+  cadence, and link out to HKMA MSB, HKMA API docs, RVD stats, HKMA stability reports.
+Watchlist status taxonomy: default = defaulted & in liquidation/stalled; restructure =
+defaulted but plan agreed/completed; watch = stressed, no default; ok = strong, no
+distress. 
+## Deploy
+Zero-config Vercel: it auto-detects Next.js, the Python function (`api/*.py` + root
+`requirements.txt`), and the cron from `vercel.json`. Document in README the Vercel
+setup: link a Blob store (sets BLOB_READ_WRITE_TOKEN), set CRON_SECRET, optional
+ANTHROPIC_API_KEY. Provide `.env.example`.
+## Verify before finishing
+- `npm run build` compiles and type-checks; analysis routes + API routes are dynamic.
+- `npm run dev` brings up Next + the Python dev API; `GET /api/cron/refresh` writes
+  snapshots; both pages then render "Cached daily snapshot" with real data (HSI tables;
+  HKMA CLR ~1.8–2.0%). The cre-news endpoint returns the graceful fallback with no key.
+Write a README documenting the architecture, the analysis-registry/swappable-source
+pattern, the daily-cache model, the Python-yfinance tradeoff, local dev, and deploy.
