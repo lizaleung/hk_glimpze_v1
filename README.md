@@ -1,4 +1,4 @@
-# Frontier
+# Hong Kong Glimpze
 
 A personal financial-analysis dashboard. Next.js (App Router) + TypeScript +
 Tailwind, deployed to Vercel. Each analysis is a self-contained module that
