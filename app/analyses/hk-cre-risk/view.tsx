@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -14,7 +14,7 @@ import {
 } from "chart.js";
 import { Line, Chart } from "react-chartjs-2";
 import type { AnalysisResult } from "@/lib/analysis-types";
-import { fmtNum, fmtAsOf } from "@/lib/format";
+import { fmtNum, fmtAsOf, monthsSince } from "@/lib/format";
 import type { CreRiskData, WatchStatus, WatchGroup } from "./fetcher";
 
 ChartJS.register(
@@ -43,6 +43,19 @@ function Dot({ sev }: { sev: Severity }) {
   return <span className={`inline-block h-2 w-2 rounded-full ${c}`} aria-label={sev} />;
 }
 
+// Staleness budgets for the manually-maintained seed blocks (in months). Each
+// block has a different natural cadence; past its budget the UI flags it.
+const STALE_AFTER_MONTHS = { office: 4, provision: 7, watchlist: 3 } as const;
+
+/** Inline "⚠ N mo old" marker shown next to a stale seed figure's as-of line. */
+function StaleTag({ months }: { months: number }) {
+  return (
+    <span className="ml-1 rounded bg-amber-100 px-1 py-0.5 text-[10px] font-medium text-amber-800">
+      ⚠ {months} mo old
+    </span>
+  );
+}
+
 function Kpi({
   label,
   value,
@@ -52,7 +65,7 @@ function Kpi({
 }: {
   label: string;
   value: string;
-  sub?: string;
+  sub?: ReactNode;
   sev: Severity;
   delta?: number | null;
 }) {
@@ -111,6 +124,23 @@ export function CreRiskView({ result }: { result: AnalysisResult<CreRiskData> })
     }
     return { def, restructure, watch };
   }, [data.watchlist]);
+
+  // -- seed-data staleness --
+  // Each manually-maintained block ages at its own cadence; surface the ones
+  // past their budget so stale figures can't masquerade as current.
+  const stale = useMemo(() => {
+    const office = monthsSince(data.officeAsOfISO);
+    const provision = monthsSince(data.provisionAsOfISO);
+    const watchlist = monthsSince(data.watchlistAsOfISO);
+    const flagged: { label: string; months: number }[] = [];
+    if (office > STALE_AFTER_MONTHS.office)
+      flagged.push({ label: "Office price index", months: office });
+    if (provision > STALE_AFTER_MONTHS.provision)
+      flagged.push({ label: "Provision coverage", months: provision });
+    if (watchlist > STALE_AFTER_MONTHS.watchlist)
+      flagged.push({ label: "Developer watchlist", months: watchlist });
+    return { office, provision, watchlist, flagged };
+  }, [data.officeAsOfISO, data.provisionAsOfISO, data.watchlistAsOfISO]);
 
   // -- alert evaluation (client-side) --
   const alerts = useMemo(() => {
@@ -320,6 +350,22 @@ export function CreRiskView({ result }: { result: AnalysisResult<CreRiskData> })
         ) : null}
       </div>
 
+      {/* Seed-data staleness */}
+      {stale.flagged.length > 0 ? (
+        <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-amber-800">
+          <div className="text-sm font-medium">⚠ Seed data may be stale</div>
+          <ul className="mt-1.5 space-y-0.5 text-[12px]">
+            {stale.flagged.map((f) => (
+              <li key={f.label} className="flex items-start gap-1.5">
+                <span className="mt-1.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-60" />
+                {f.label} last updated {f.months} months ago — these are hand-maintained
+                figures; verify against source before relying on them.
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
       {/* KPI cards */}
       <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Kpi
@@ -338,13 +384,27 @@ export function CreRiskView({ result }: { result: AnalysisResult<CreRiskData> })
         <Kpi
           label="Provision Coverage"
           value={`${fmtNum(data.provisionCoverage, 0)}%`}
-          sub={`Seed · ${data.provisionAsOf}`}
+          sub={
+            <>
+              Seed · {data.provisionAsOf}
+              {stale.provision > STALE_AFTER_MONTHS.provision ? (
+                <StaleTag months={stale.provision} />
+              ) : null}
+            </>
+          }
           sev="amber"
         />
         <Kpi
           label="Office Price YoY"
           value={`${fmtNum(data.officeYoY)}%`}
-          sub={`Seed · ${data.officeAsOf}`}
+          sub={
+            <>
+              Seed · {data.officeAsOf}
+              {stale.office > STALE_AFTER_MONTHS.office ? (
+                <StaleTag months={stale.office} />
+              ) : null}
+            </>
+          }
           sev="amber"
         />
       </div>
@@ -384,6 +444,9 @@ export function CreRiskView({ result }: { result: AnalysisResult<CreRiskData> })
       <section className="mt-8">
         <h2 className="mb-2 text-[11px] font-medium uppercase tracking-wide text-slate-400">
           Developer watchlist · seed as of {data.watchlistAsOf}
+          {stale.watchlist > STALE_AFTER_MONTHS.watchlist ? (
+            <StaleTag months={stale.watchlist} />
+          ) : null}
         </h2>
         <Watchlist groups={data.watchlist} />
       </section>
