@@ -7,12 +7,11 @@ a cron job and served to all visitors from a cached snapshot.
 
 ## Quick start
 
-Requires Node 18+ and Python 3.9+ (for the `yfinance` data function):
+Requires Node 18+. Everything is TypeScript — no other runtime needed:
 
 ```bash
 npm install
-pip3 install -r requirements.txt      # add --break-system-packages on macOS if needed
-npm run dev                            # Next on :3000 + Python data API on :8000
+npm run dev                            # Next on :3000
 ```
 
 Open http://localhost:3000. To seed the local cache so pages serve from a
@@ -21,9 +20,6 @@ snapshot (instead of live-fetching), hit the refresh job once:
 ```bash
 curl http://localhost:3000/api/cron/refresh    # writes .snapshots/*.json locally
 ```
-
-`npm run dev:next` runs only the Next server (the UI loads, but HSI data calls
-fail until the Python API is up).
 
 ## Architecture
 
@@ -89,8 +85,9 @@ Page load → loadAnalysis(slug) → read snapshot (unstable_cache) → render
 
 Ranks Hang Seng constituents by trailing P/E and PEG: top 10 by each metric, the
 overlap, and an excluded list (loss-making / missing data). Flags rows where P/E
-and PEG disagree, or forward P/E diverges from trailing. Data via the Python
-`yfinance` function (below).
+and PEG disagree, or forward P/E diverges from trailing. Data from Yahoo Finance
+via `yahoo-finance2`, fetched in-process (see
+[yahoo-source.ts](app/analyses/hsi-valuation/yahoo-source.ts)).
 
 ### HK CRE Risk Monitor — `/analyses/hk-cre-risk`
 
@@ -100,35 +97,22 @@ Hong Kong commercial-real-estate credit risk:
   (`HkmaClrSource`), quarter-ends, last 12 quarters. Overall + mainland-related.
 - **Office prices, provision coverage, watchlist (seed)** — RVD publishes office
   prices as XLS/PDF only and provision coverage is a semi-annual figure, so these
-  are manually-maintained seed data in `fetcher.ts`. Watchlist statuses are an
-  editorial assessment — verify before relying on them.
+  are manually-maintained in [seed.json](app/analyses/hk-cre-risk/seed.json), each
+  block carrying an ISO `asOf` the UI uses to flag stale figures. Watchlist
+  statuses are an editorial assessment — verify before relying on them.
 - **Threshold alerts (client-side)** — configurable CLR (default 2.5%) and office
   QoQ (default −5%) thresholds drive a red/amber/green banner.
 - **Charts** — CLR lines with a threshold line; office QoQ bars + index line.
-- **Developer news re-scan** — [app/api/cre-news/route.ts](app/api/cre-news/route.ts)
-  uses Claude (`claude-opus-4-8`) with server-side web search to extract recent
-  developer credit news. Requires `ANTHROPIC_API_KEY`; degrades to topic-page
-  links without it.
+- **Developer news** — [news.ts](app/analyses/hk-cre-risk/news.ts) uses Claude
+  (`claude-opus-4-8`) with server-side web search to extract recent developer
+  credit news. This is expensive, so it runs once a day in the cron job and is
+  served from a cached snapshot; the "Re-scan" button
+  ([app/api/cre-news/route.ts](app/api/cre-news/route.ts)) triggers an on-demand
+  live refresh. Requires `ANTHROPIC_API_KEY`; degrades to topic-page links
+  without it.
 
-The HKMA source is a clean JSON API, so this analysis fetches JS-native (no
-Python runtime) — still behind the `ClrDataSource` interface for swappability.
-
-## Data source: Python `yfinance` (and the tradeoff)
-
-HSI metrics come from `yfinance`, run as a **Python serverless function** at
-[api/hsi_valuation.py](api/hsi_valuation.py) (Vercel's Python runtime). Core
-fetch logic lives in [api/_lib/yf_source.py](api/_lib/yf_source.py), shared with
-the local dev server.
-
-**Why Python:** `yfinance` gives reliable, free coverage of all `.HK` tickers
-with the exact fields needed (`trailingPE`, `forwardPE`, `trailingPegRatio`,
-`marketCap`). The pure-JS Yahoo wrappers are unofficial and rate-limit harder.
-
-**The tradeoff:** plain `next dev` does not serve `/api/*.py`, so local dev runs
-the same fetch logic as a small HTTP server ([scripts/dev_api.py](scripts/dev_api.py))
-alongside Next via `concurrently`. On Vercel the function is served natively.
-Point Next at a different data endpoint with `PYTHON_API_BASE_URL` (see
-[.env.example](.env.example)).
+Both analyses fetch in-process (the HKMA JSON API for CRE, `yahoo-finance2` for
+HSI) behind the `ClrDataSource` / `HsiDataSource` interfaces for swappability.
 
 ## Adding an analysis
 
@@ -149,15 +133,14 @@ No shell edits.
 vercel        # or connect the repo in the Vercel dashboard
 ```
 
-Vercel auto-detects Next.js (`package.json`), the Python function (`api/*.py` +
-root `requirements.txt`), and the cron schedule (`vercel.json`). Then:
+Vercel auto-detects Next.js (`package.json`) and the cron schedule
+(`vercel.json`). Then:
 
 | Setting | Required for | Notes |
 |---|---|---|
 | Blob store (Storage → Blob) | daily snapshot cache | Sets `BLOB_READ_WRITE_TOKEN` automatically |
-| `CRON_SECRET` | securing the refresh job | Vercel sends it to the cron as a Bearer token |
-| `ANTHROPIC_API_KEY` | developer-news re-scan | Optional; without it the news panel shows topic links |
+| `CRON_SECRET` | securing the refresh job | **Required** — the refresh job fails closed (503) on Vercel without it |
+| `ANTHROPIC_API_KEY` | developer-news scan | Optional; without it the news panel shows topic links |
 
-The HSI ↔ Python function calls resolve via `VERCEL_URL` automatically. On first
-deploy, pages live-fetch until the first cron run — or trigger it once:
+On first deploy, pages live-fetch until the first cron run — or trigger it once:
 `GET /api/cron/refresh` with `Authorization: Bearer $CRON_SECRET`.

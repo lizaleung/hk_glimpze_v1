@@ -16,7 +16,7 @@ import { Line, Chart } from "react-chartjs-2";
 import type { AnalysisResult } from "@/lib/analysis-types";
 import { fmtNum, fmtAsOf, monthsSince } from "@/lib/format";
 import type { CreRiskData, WatchStatus, WatchGroup } from "./fetcher";
-import type { NewsResult } from "@/lib/cre-news";
+import type { NewsResult } from "./news";
 
 ChartJS.register(
   CategoryScale,

@@ -1,8 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  // Python data fetching lives in /api/*.py (Vercel Python runtime), not Next.
-  // Nothing special needed here — the seam is the data-source interface in lib/.
+  // All data fetching is in-process TypeScript now (see the HsiDataSource seam in
+  // app/analyses/hsi-valuation/yahoo-source.ts). yahoo-finance2 is a server-only
+  // dependency; ensure it's bundled for the Node server runtime, never the client.
+  serverExternalPackages: ["yahoo-finance2"],
 };
 
 export default nextConfig;

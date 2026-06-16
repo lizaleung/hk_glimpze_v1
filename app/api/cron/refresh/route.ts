@@ -3,7 +3,7 @@ import { revalidatePath, revalidateTag } from "next/cache";
 import { liveFetchers } from "@/lib/analyses-runtime";
 import { writeSnapshot } from "@/lib/snapshot";
 import { analysisTag } from "@/lib/load-analysis";
-import { refreshCreNews, NEWS_TAG } from "@/lib/cre-news";
+import { refreshCreNews, NEWS_TAG } from "@/app/analyses/hk-cre-risk/news";
 
 /**
  * Daily refresh job. Runs every analysis's LIVE fetcher (fetch + analyze),

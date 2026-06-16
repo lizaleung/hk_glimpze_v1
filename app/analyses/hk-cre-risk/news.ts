@@ -1,7 +1,7 @@
 import "server-only";
 import Anthropic from "@anthropic-ai/sdk";
 import { unstable_cache } from "next/cache";
-import { readJson, writeJson } from "./snapshot";
+import { readJson, writeJson } from "@/lib/snapshot";
 
 /**
  * HK / mainland property-developer credit news.

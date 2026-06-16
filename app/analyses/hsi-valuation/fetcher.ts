@@ -1,77 +1,13 @@
 import type { AnalysisFetcher, AnalysisResult } from "@/lib/analysis-types";
 import type { Divergence } from "@/lib/ui/DivergenceFlag";
+import {
+  YahooFinanceSource,
+  type HsiDataSource,
+  type RawConstituent,
+  type RawPayload,
+} from "./yahoo-source";
 
-/* ------------------------------------------------------------------ */
-/* Swappable data source                                               */
-/* ------------------------------------------------------------------ */
-
-/** Raw per-constituent metrics — whatever the data source can provide. */
-export interface RawConstituent {
-  ticker: string;
-  name: string;
-  trailingPE: number | null;
-  forwardPE: number | null;
-  peg: number | null;
-  marketCap: number | null;
-}
-
-export interface RawPayload {
-  source: string;
-  asOf: string;
-  rows: RawConstituent[];
-}
-
-/**
- * The seam. Any source (Python yfinance now; FMP, a cached snapshot, or a
- * flat JSON file later) implements this. Swapping sources never touches the
- * ranking logic or the view.
- */
-export interface HsiDataSource {
-  readonly name: string;
-  fetchRaw(): Promise<RawPayload>;
-}
-
-function pythonApiBase(): string {
-  // Explicit override wins everywhere.
-  if (process.env.PYTHON_API_BASE_URL) return process.env.PYTHON_API_BASE_URL;
-  // On Vercel the Python function shares the deployment domain.
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
-  // Local dev: scripts/dev_api.py serves the function on :8000.
-  if (process.env.NODE_ENV === "development") return "http://localhost:8000";
-  // Production without VERCEL_URL or an override: there is no sensible default —
-  // fail loud rather than silently fetch from localhost (which would just hang
-  // or 404). Set PYTHON_API_BASE_URL to point at the data function.
-  throw new Error(
-    "Cannot resolve the Python data function URL: set PYTHON_API_BASE_URL " +
-      "(no VERCEL_URL present and not in development)."
-  );
-}
-
-/** Default source: the Python yfinance serverless function (/api/hsi_valuation). */
-export class PythonYfinanceSource implements HsiDataSource {
-  readonly name = "Yahoo Finance via yfinance";
-
-  async fetchRaw(): Promise<RawPayload> {
-    const url = `${pythonApiBase()}/api/hsi_valuation`;
-    const res = await fetch(url, { cache: "no-store" });
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(
-        `Data function returned ${res.status} ${res.statusText}${
-          body ? ` — ${body.slice(0, 300)}` : ""
-        }`
-      );
-    }
-    const json = (await res.json()) as Partial<RawPayload> & { error?: string };
-    if (json.error) throw new Error(json.error);
-    if (!Array.isArray(json.rows)) throw new Error("Malformed payload: missing rows[]");
-    return {
-      source: json.source ?? this.name,
-      asOf: json.asOf ?? new Date().toISOString(),
-      rows: json.rows,
-    };
-  }
-}
+export type { RawConstituent, RawPayload, HsiDataSource } from "./yahoo-source";
 
 /* ------------------------------------------------------------------ */
 /* Analysis logic — exclusion, ranking, divergence flags               */
@@ -194,7 +130,7 @@ export function buildHsiValuation(payload: RawPayload): HsiValuationData {
 /* ------------------------------------------------------------------ */
 
 export class HsiValuationFetcher implements AnalysisFetcher<HsiValuationData> {
-  constructor(private readonly source: HsiDataSource = new PythonYfinanceSource()) {}
+  constructor(private readonly source: HsiDataSource = new YahooFinanceSource()) {}
 
   async fetch(): Promise<AnalysisResult<HsiValuationData>> {
     const payload = await this.source.fetchRaw();

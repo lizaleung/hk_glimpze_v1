@@ -2,7 +2,7 @@ import type { CreRiskData } from "./fetcher";
 import { CreRiskView } from "./view";
 import { ErrorPanel } from "@/lib/ui/ErrorPanel";
 import { loadAnalysis } from "@/lib/load-analysis";
-import { loadCreNews } from "@/lib/cre-news";
+import { loadCreNews } from "./news";
 
 // Reads the daily snapshot (cached). The live HKMA fetch and the developer-news
 // scan both run once a day in the cron job, not on the request path.

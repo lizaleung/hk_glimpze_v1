@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { revalidateTag } from "next/cache";
-import { refreshCreNews, NEWS_TAG } from "@/lib/cre-news";
+import { refreshCreNews, NEWS_TAG } from "@/app/analyses/hk-cre-risk/news";
 
 /**
  * On-demand developer-news re-scan endpoint (the "Re-scan" button).
